@@ -3,11 +3,18 @@
 """
 Created on Tue May 12 18:28:54 2020
 
-@author: jac
+@author: Dr J A Christen (CIMAT-CONACYT, Mexico) jac at cimat.mx
 
 Instantaneous reproduction numbers calculations.
 
 Rts_P, Implementation of Cori et al (2013)
+
+Rts_AR, new filtering version using an autoregressive linear model of Capistrán, Capella and Christen (2020):
+https://arxiv.org/abs/2012.02168, 05DIC2021 
+
+01FEB2021: Some buggs were corrected to avoid error when too low counts are used and for prediction when g=1.
+
+Go directly to __main__ for examples.
 
 """
 
@@ -376,14 +383,6 @@ class Rts_NB_psi:
             """
         return log_post
     
-    def sim_data( self, R, I0, psi):
-        data = zeros(self.m)
-        data[0] = I0
-        for s in range(1,tst.m):
-            gamma_s = data[:s] @ self.w[(self.m-s):]
-            data[s] = Sim_NB( mu=R[s]*gamma_s, psi=psi)
-        return data
-
     def sim_init(self):
         """Simulate initial values from the Rts_NB and the prior for psi."""
         # Shake the Rts_NB simulation to avoid repeated values
@@ -530,16 +529,34 @@ class Rts_AR:
         else:
             self.data = data[:,1]
         self.init_date = init_date
-        self.m = len(self.data)
+        self.m = len(self.data) ##Data size
+        ### Calculate the serial time distribution
         self.IP_dist = IP_dist
         self.w = diff(IP_dist.cdf( arange( 0, self.m+1)))
         self.w /= sum(self.w)
         self.w = flip(self.w)
-        ### Calculation range and prior parameters
-        self.n = min(self.m, n)
-        self.shift = 5*tau
+        
+        ### Calculation range 
+        self.shift = 5*tau #Number of days to start calculation before the frist Rt. 
+        self.n = min(self.m, n) #Number of Rt's to calculate, from the present into the past.
+        self.N = n+self.shift #Total range (into the past) for calculation
+        #If self.N is larger than the whole data set
+        if self.N > (self.m-1):
+            self.n -= self.N - (self.m-1)#Reduce self.n accordingly
+            self.N = n+self.shift
+            if self.n < 0:
+                raise ValueError("ERROR: Not enough data to calculate Rts: 5*tau > %d (data size)" % (self.m,))
+            print("Not enough data to calculate Rts: 5*tau + n > %d (data size)" % (self.m,))
+            print("Reducing to n=%d" % (self.n,))
+        for t in range(self.n):
+            if self.data[self.m-(self.n - t)] >= 10:
+                break
+            else:
+                self.n -= 1 #Reduce n if the counts have not reached 10
+                print("Incidence below 10, reducing n to %d." % (self.n,))
+        self.N = self.n+self.shift
+        ### Setting prior parameters
         self.delta = 1-(1/tau)
-        self.N = min(self.m, n+self.shift)
         self.tau = tau
         self.pred = pred
         self.g = 1 #exp(-2/tau)
@@ -561,7 +578,9 @@ class Rts_AR:
         for s in range(self.m):
             self.Gammak[s] = self.data[:s] @ self.w[(self.m-s):] #\Gamma_k
         ### Calculate the log data:
-        self.y = log(self.data + 1e-6) - log(self.Gammak)
+        ### We add 1e-6 for convinience, since very early data may be zero
+        ### This makes no diference at the end.
+        self.y = log(self.data + 1e-6) - log(self.Gammak + 1e-6)
         
         
     def sim_data( self, R, I0):
@@ -619,7 +638,11 @@ class Rts_AR:
             self.pred_hiper = zeros(( self.pred, 2)) # a_t^k and r_t^k
             for k in range(self.pred):
                 self.pred_hiper[k,0] = self.g**(k+1) * self.hiper[t,5] #a_t^k
-                self.pred_hiper[k,1] = self.g**(2*(k+1)) * self.hiper[t,6] + self.w_a_t * ((1-self.g**(2*(k+1)))/(1-self.g**2))
+                if self.g == 1:
+                    self.pred_hiper[k,1] = self.g**(2*(k+1)) * self.hiper[t,6] + self.w_a_t * (k+1) #r_t^k
+                else:
+                    self.pred_hiper[k,1] = self.g**(2*(k+1)) * self.hiper[t,6] + self.w_a_t * ((1-self.g**(2*(k+1)))/(1-self.g**2))  #r_t^k
+                    
                 if self.simulate:
                    self.rts_pred[:,k] = exp(t_student.rvs( size=self.q, df=self.hiper[t,0], loc=self.pred_hiper[k,0], scale=sqrt(self.pred_hiper[k,1]) )) 
                 else:
@@ -637,11 +660,12 @@ class Rts_AR:
         ax.set_ylabel("Density")
         ax.set_xlabel(r'$R_{%d}$' % (i))
 
-    def PlotRts( self, color='blue', median_color='red', x_jump=1, csv_fnam=None, alpha=0.25, ax=None):
+    def PlotRts( self, color='blue', median_color='red', x_jump=1, plot_area=[0.4,2.2], alpha=0.25, csv_fnam=None, ax=None):
         """Makes a board with the Rt evolution.
-           csv_fnam: optional file name to save the Rts info.
+           csv_fnam: optional file name to save the Rts info: workdir/csv/csv_fnam.csv
            ax: Axis hadle to for the plot, if None, it creates one and retruns it.
            x_jump: put ticks every x_jump days.
+           plot_area: ([0.4,2.2]), interval with the y-axis (Rt values) plot area. 
        """
         
         #self.rts already been produced after running CalculateRts
@@ -675,8 +699,8 @@ class Rts_AR:
         ax.axhline(y=1, color='green')
         ax.axhline(y=2, color='red')
         ax.axhline(y=3, color='darkred')
-        ax.set_ylim((0.4,2.2))
-        ax.set_yticks(arange( 0.4, 2.2, step=0.2))
+        ax.set_ylim(plot_area)
+        ax.set_yticks(arange( plot_area[0], plot_area[1], step=0.2))
         ax.tick_params( which='major', axis='y', labelsize=10)
         ax.grid(color='grey', linestyle='--', linewidth=0.5)
         #fig.tight_layout()
@@ -693,7 +717,7 @@ class Rts_AR:
                 sv[ i, 2] = d.day
                 sv[ i, 3:] = self.rts[:,i]
             q_str = ', '.join(["q_%02d" % (qunt,) for qunt in self.q])
-            savetxt( csv_fnam, sv, delimiter=', ', fmt='%.1f', header="year, month, day, " + q_str, comments='')
+            savetxt( self.workdir + "csv/" + csv_fnam + ".csv", sv, delimiter=', ', fmt='%.1f', header="year, month, day, " + q_str, comments='')
         return ax
 
 
@@ -710,11 +734,11 @@ ZMs = {  "9-01":         ["Mexico city", 2, 21.942666e6, date(2020, 2, 27)],\
 ### The correponding data files have two columns separated by space, deaths and incidence.
 ### Each row is one day.
 ### The file for clave="9-01" (Mexico city) is: ../data/clave.csv etc.
-    
-rcParams.update({'font.size': 14})
+
 
 if __name__=='__main__':
 
+    rcParams.update({'font.size': 14})
     close('all')
     #Plot the imputed serial time distribution for covid: erlang( a=3, scale=8/3 )
     fig, ax = subplots( num=30, figsize=( 4.5, 3.5))
@@ -736,16 +760,17 @@ if __name__=='__main__':
     x_jump = 7 ## For ploting, put ticks every x_jump days.
 
     for i,clave in enumerate(claves):
+        print(clave)
         ### Open an instance of the Rts_AR class: 
-        tst = Rts_AR( clave, init_date=ZMs[clave][3]+timedelta(days=4), trim=trim, pred=0, n=n)
+        tst = Rts_AR( clave, init_date=ZMs[clave][3]+timedelta(days=4), trim=trim, pred=5, n=n)
         tst.CalculateRts() # Most be called before ploting the Rt's
         ### Plot the Rts:
         fig, ax = subplots( num=i+1, figsize=( 8, 3.5))
         ### Plot Cori et al (2013) Poisson model version:
         PlotRts_P( '../data/%s.csv' % (clave,), init_date=ZMs[clave][3]+timedelta(days=4),\
-                n=n, trim=trim, ax=ax, color='green', alpha=0.5, median_color='black')
+                n=tst.n, trim=trim, ax=ax, color='green', alpha=0.5, median_color='black')
         ### Plot ours:
-        tst.PlotRts( ax=ax, x_jump=x_jump)
+        tst.PlotRts( ax=ax, x_jump=x_jump, plot_area=[0.4,2.2], csv_fnam=clave)
         ax.set_title("")
         ax.set_ylabel(r"$R_t$")
         ax.set_xlabel("")
