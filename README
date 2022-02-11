@@ -1,9 +1,11 @@
 
-Python implementation of:
-Capistran, Capella and Chirsten (2020), "Filtering and improved Uncertainty Quantification in the dynamic estimation of effective reproduction numbers"
+Python implementation of the auto-regressive AR(1) estimation of the Rt:
+Capistran, Capella and Chirsten (2020), "Filtering and improved Uncertainty Quantification in the
+  dynamic estimation of effective reproduction numbers"
 https://arxiv.org/abs/2012.02168
 
-A couple of bugg were corrected, to avoid errors when too low counts are used and when using predictions.
+A couple of buggs were corrected, to avoid errors when too low counts.
 
-Please go directly to code/Rts.py and follow the instructions within.
+Please go directly to code/SimpleExample.py and follow the instructions within.
 
+The preprint figures may be created with code/PaperPlots.py
