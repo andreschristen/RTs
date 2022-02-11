@@ -4,7 +4,7 @@ Capistran, Capella and Chirsten (2020), "Filtering and improved Uncertainty Quan
   dynamic estimation of effective reproduction numbers"
 https://arxiv.org/abs/2012.02168
 
-A couple of buggs were corrected, to avoid errors when too low counts.
+A couple of buggs were corrected, to avoid errors when having too low counts.
 
 Please go directly to code/SimpleExample.py and follow the instructions within.
 
